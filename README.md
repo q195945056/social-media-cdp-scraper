@@ -108,7 +108,7 @@ https://www.douyin.com/video/...
 https://v.kuaishou.com/KNtcMaqR
 ```
 
-统一入口会输出一个合并汇总 CSV：
+统一入口只输出一个合并汇总 CSV：
 
 ```text
 work_stats_summary.csv
@@ -119,11 +119,6 @@ work_stats_summary.csv
 ```text
 平台,达人昵称,作品ID,作品链接,作品标题,发布时间,点赞,评论,收藏,转发
 ```
-
-同时保留平台原始汇总：
-
-- `douyin/douyin_work_stats_summary.csv`
-- `kuaishou/kuaishou_work_stats_summary.csv`
 
 发布时间能解析时使用北京时间 `yyyy-MM-dd HH:mm:ss`。
 

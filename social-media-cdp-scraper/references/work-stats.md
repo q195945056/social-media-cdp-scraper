@@ -31,10 +31,8 @@ Use `1` for safest behavior, `2` or `3` for moderate parallelism.
 
 ## Outputs
 
-- Combined summary CSV: `work_stats_summary.csv`
-- Platform raw CSVs are kept in subdirectories:
-  - `douyin/douyin_work_stats_summary.csv`
-  - `kuaishou/kuaishou_work_stats_summary.csv`
+- Combined summary CSV only: `work_stats_summary.csv`
+- Platform raw CSVs are only used internally in a temporary directory and are removed after the combined CSV is written.
 
 Kuaishou work stats scraping emulates iPhone Safari. Kuaishou public mobile pages may omit发布时间 or share counts; leave unavailable fields blank rather than guessing.
 

@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -60,7 +61,7 @@ async function loadUrls(options) {
 function runNode(script, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [script, ...args], {
-      stdio: 'inherit',
+      stdio: ['ignore', 'ignore', 'inherit'],
       env: { ...process.env, HTTP_PROXY: '', HTTPS_PROXY: '', http_proxy: '', https_proxy: '' },
     });
     child.on('error', reject);
@@ -167,28 +168,33 @@ async function main() {
   }
 
   const outputs = [];
-  for (const [platform, platformUrls] of Object.entries(groups)) {
-    if (!platformUrls.length) continue;
-    const platformOutDir = path.join(options.outDir, platform);
-    const script = path.join(scriptDir, platform === 'douyin' ? 'scrape_douyin_work_stats_cdp.mjs' : 'scrape_kuaishou_work_stats_cdp.mjs');
-    const args = [
-      ...platformUrls.flatMap((url) => ['--url', url]),
-      '--concurrency', String(options.concurrency),
-      '--max-run-ms', String(options.maxRunMs),
-      '--cdp-base', options.cdpBase,
-      '--out-dir', platformOutDir,
-    ];
-    await runNode(script, args);
-    outputs.push({
-      platform,
-      csvPath: path.join(platformOutDir, platform === 'douyin' ? 'douyin_work_stats_summary.csv' : 'kuaishou_work_stats_summary.csv'),
-    });
-  }
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'social-media-work-stats-'));
+  try {
+    for (const [platform, platformUrls] of Object.entries(groups)) {
+      if (!platformUrls.length) continue;
+      const platformOutDir = path.join(tempRoot, platform);
+      const script = path.join(scriptDir, platform === 'douyin' ? 'scrape_douyin_work_stats_cdp.mjs' : 'scrape_kuaishou_work_stats_cdp.mjs');
+      const args = [
+        ...platformUrls.flatMap((url) => ['--url', url]),
+        '--concurrency', String(options.concurrency),
+        '--max-run-ms', String(options.maxRunMs),
+        '--cdp-base', options.cdpBase,
+        '--out-dir', platformOutDir,
+      ];
+      await runNode(script, args);
+      outputs.push({
+        platform,
+        csvPath: path.join(platformOutDir, platform === 'douyin' ? 'douyin_work_stats_summary.csv' : 'kuaishou_work_stats_summary.csv'),
+      });
+    }
 
-  const rows = [];
-  for (const output of outputs) rows.push(...await readPlatformRows(output.platform, output.csvPath));
-  const combined = await writeCombinedCsv(options.outDir, rows);
-  console.log(`Wrote ${rows.length} rows to ${combined}`);
+    const rows = [];
+    for (const output of outputs) rows.push(...await readPlatformRows(output.platform, output.csvPath));
+    const combined = await writeCombinedCsv(options.outDir, rows);
+    console.log(`Wrote ${rows.length} rows to ${combined}`);
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 main().catch((error) => {
