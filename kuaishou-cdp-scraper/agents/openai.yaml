@@ -1,0 +1,4 @@
+interface:
+  display_name: "Douyin CDP Scraper"
+  short_description: "Scrape Douyin comments and work metrics through Chrome CDP"
+  default_prompt: "Use $douyin-cdp-scraper to scrape comments or work metrics from these Douyin links."

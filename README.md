@@ -1,8 +1,11 @@
-# 抖音抓取 Codex Skill
+# 短视频抓取 Codex Skills
 
-这个仓库提供一个 Codex skill：`douyin-cdp-scraper`。
+这个仓库提供两个 Codex skills：
 
-它通过带 Chrome DevTools Protocol（CDP）的真实 Chrome 浏览器抓取抖音数据，并把不同能力拆在 skill 内部的 `references/` 文档里：
+- `douyin-cdp-scraper`
+- `kuaishou-cdp-scraper`
+
+它们通过带 Chrome DevTools Protocol（CDP）的真实 Chrome 浏览器抓取短视频平台数据，并把不同能力拆在 skill 内部的 `references/` 文档里：
 
 ```text
 douyin-cdp-scraper/
@@ -14,6 +17,15 @@ douyin-cdp-scraper/
     ensure_chrome_cdp.mjs
     scrape_douyin_comments_cdp.mjs
     scrape_douyin_work_stats_cdp.mjs
+kuaishou-cdp-scraper/
+  SKILL.md
+  references/
+    comments.md
+    work-stats.md
+  scripts/
+    ensure_chrome_cdp.mjs
+    scrape_kuaishou_comments_cdp.mjs
+    scrape_kuaishou_work_stats_cdp.mjs
 ```
 
 ## 能力
@@ -40,6 +52,8 @@ repo: q195945056/douyin-cdp-scraper
 path: douyin-cdp-scraper
 ```
 
+安装快手 skill 时把 path 改成 `kuaishou-cdp-scraper`。
+
 安装完成后，重启 Codex，让新的 skill 生效。
 
 ## 手动安装方式
@@ -50,6 +64,7 @@ path: douyin-cdp-scraper
 mkdir -p ~/.codex/skills
 git clone https://github.com/q195945056/douyin-cdp-scraper.git /tmp/douyin-cdp-scraper
 cp -R /tmp/douyin-cdp-scraper/douyin-cdp-scraper ~/.codex/skills/
+cp -R /tmp/douyin-cdp-scraper/kuaishou-cdp-scraper ~/.codex/skills/
 ```
 
 然后重启 Codex。
@@ -122,3 +137,4 @@ https://www.douyin.com/video/...
 
 - 如果抓取结果为空，通常需要检查是否登录、是否出现验证码、链接是否是作品页。
 - 不要尝试绕过验证码；需要用户自己在浏览器里完成登录验证。
+- 快手公开网页可能返回风控或推荐跳转；脚本会记录最终 `photoId`，无法稳定获得的字段会留空。
