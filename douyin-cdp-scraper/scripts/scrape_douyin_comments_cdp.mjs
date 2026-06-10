@@ -50,7 +50,35 @@ async function getJson(url) {
   return response.json();
 }
 
+async function findPageById(cdpBase, targetId) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const pages = await getJson(`${cdpBase}/json/list`);
+    const page = pages.find((item) => item.id === targetId && item.type === 'page' && item.webSocketDebuggerUrl);
+    if (page) return page;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return null;
+}
+
 async function createPage(cdpBase) {
+  try {
+    const version = await getJson(`${cdpBase}/json/version`);
+    if (version.webSocketDebuggerUrl) {
+      const browser = await connect(version.webSocketDebuggerUrl);
+      try {
+        const result = await browser.send('Target.createTarget', {
+          url: 'about:blank',
+          background: true,
+        });
+        const page = await findPageById(cdpBase, result.targetId);
+        if (page) return { ...page, shouldCloseTarget: true };
+      } finally {
+        browser.close();
+      }
+    }
+  } catch {
+    // Fall back to /json/new when browser-level background targets are unavailable.
+  }
   try {
     const response = await fetch(`${cdpBase}/json/new?about:blank`, { method: 'PUT' });
     if (response.ok) return { ...await response.json(), shouldCloseTarget: true };
@@ -138,6 +166,35 @@ function normalizeTarget(rawUrl) {
   };
 }
 
+function formatBeijingTime(timestamp) {
+  if (!Number.isFinite(timestamp)) return null;
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(timestamp * 1000));
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${byType.year}-${byType.month}-${byType.day} ${byType.hour}:${byType.minute}:${byType.second}`;
+}
+
+function normalizeCommentTime(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number' || /^\d+$/.test(String(value))) {
+    const raw = Number(value);
+    if (!Number.isFinite(raw) || raw <= 0) return null;
+    const timestamp = raw > 100000000000 ? Math.round(raw / 1000) : raw;
+    return formatBeijingTime(timestamp);
+  }
+  const parsed = Date.parse(String(value).trim().replace(/年|\/|\./g, '-').replace(/月/g, '-').replace(/日/g, ''));
+  if (!Number.isFinite(parsed)) return null;
+  return formatBeijingTime(Math.round(parsed / 1000));
+}
+
 function normalizeComment(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const user = raw.user || raw.author || {};
@@ -147,7 +204,7 @@ function normalizeComment(raw) {
   return {
     cid: String(cid),
     text: String(text).replace(/\s+/g, ' ').trim(),
-    create_time: raw.create_time || raw.createTime || null,
+    create_time: normalizeCommentTime(raw.create_time || raw.createTime),
     digg_count: raw.digg_count ?? raw.like_count ?? null,
     reply_comment_total: raw.reply_comment_total ?? raw.reply_count ?? null,
     user_nickname: raw.user_nickname || user.nickname || user.name || '',
@@ -183,17 +240,14 @@ async function writeOutputCsv(outDir, base, payload) {
   await fs.mkdir(outDir, { recursive: true });
   const csvPath = path.join(outDir, `${base}.csv`);
   const columns = [
-    'cid',
-    'text',
-    'create_time',
-    'digg_count',
-    'reply_comment_total',
-    'user_nickname',
-    'user_uid',
-    'user_sec_uid',
+    ['昵称', 'user_nickname'],
+    ['评论内容', 'text'],
+    ['评论时间', 'create_time'],
+    ['点赞数', 'digg_count'],
+    ['回复数', 'reply_comment_total'],
   ];
-  const rows = payload.comments.map((comment) => columns.map((key) => csvEscape(comment[key])).join(','));
-  await fs.writeFile(csvPath, [columns.join(','), ...rows].join('\n'));
+  const rows = payload.comments.map((comment) => columns.map(([, key]) => csvEscape(comment[key])).join(','));
+  await fs.writeFile(csvPath, [columns.map(([label]) => label).join(','), ...rows].join('\n'));
   return csvPath;
 }
 

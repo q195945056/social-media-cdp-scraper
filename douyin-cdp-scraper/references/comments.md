@@ -41,4 +41,10 @@ The scraper opens at most one Chrome tab per worker, reuses it for multiple work
 - Per work comments CSV: `douyin_comments_<aweme_id>.csv`
 - No JSON files are written.
 
+The CSV uses Chinese headers:
+
+`昵称,评论内容,评论时间,点赞数,回复数`
+
+`评论时间` uses Beijing time in `yyyy-MM-dd HH:mm:ss` format when parseable.
+
 Confirm each CSV's data rows match the requested cap or the number actually loaded before the page stopped producing new comments. Treat the result as “up to N comments per work”; Douyin may stop returning more comments before the limit.

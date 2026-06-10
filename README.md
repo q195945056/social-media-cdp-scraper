@@ -78,7 +78,7 @@ https://www.douyin.com/video/...
 https://www.douyin.com/video/...
 ```
 
-评论数据按作品分别输出 CSV：`douyin_comments_<awemeId>.csv`，不生成 JSON。
+评论数据按作品分别输出 CSV：`douyin_comments_<awemeId>.csv`，不生成 JSON。表头为：`昵称, 评论内容, 评论时间, 点赞数, 回复数`，评论时间使用北京时间 `yyyy-MM-dd HH:mm:ss` 格式。
 
 ## 作品数据抓取使用方式
 
