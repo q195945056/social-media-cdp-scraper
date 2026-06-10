@@ -1,4 +1,0 @@
-interface:
-  display_name: "Douyin Work Stats CDP"
-  short_description: "Scrape Douyin work metrics through Chrome CDP"
-  default_prompt: "Use $douyin-work-stats-cdp to scrape like, comment, collect, share, and publish time metrics from these Douyin work links."
