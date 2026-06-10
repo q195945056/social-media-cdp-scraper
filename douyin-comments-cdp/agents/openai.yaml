@@ -1,0 +1,4 @@
+interface:
+  display_name: "Douyin Comments CDP"
+  short_description: "Scrape Douyin video comments through Chrome CDP"
+  default_prompt: "Use $douyin-comments-cdp to scrape up to 1000 comments from these Douyin video links."
