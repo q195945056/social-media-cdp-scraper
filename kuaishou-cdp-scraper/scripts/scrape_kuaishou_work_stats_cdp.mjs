@@ -144,10 +144,23 @@ function workFromUrl(rawUrl) {
     text.match(/\/short-video\/([A-Za-z0-9_-]+)/) ||
     text.match(/\/fw\/photo\/([A-Za-z0-9_-]+)/) ||
     text.match(/\/photo\/([A-Za-z0-9_-]+)/);
-  if (directMatch) return { id: directMatch[1], type: 'photo' };
+  const ids = new Set();
+  if (directMatch) ids.add(directMatch[1]);
+  try {
+    const parsed = new URL(text);
+    for (const key of ['photoId', 'photo_id', 'shareObjectId']) {
+      const value = parsed.searchParams.get(key);
+      if (value) ids.add(value);
+    }
+  } catch {
+    for (const match of text.matchAll(/[?&](?:photoId|photo_id|shareObjectId)=([A-Za-z0-9_-]+)/g)) {
+      ids.add(match[1]);
+    }
+  }
+  if (directMatch) return { id: directMatch[1], ids: [...ids], type: 'photo' };
   const queryMatch = text.match(/[?&](?:photoId|photo_id|shareObjectId)=([A-Za-z0-9_-]+)/);
-  if (queryMatch) return { id: queryMatch[1], type: 'photo' };
-  return { id: null, type: null };
+  if (queryMatch) return { id: queryMatch[1], ids: [...ids], type: 'photo' };
+  return { id: null, ids: [...ids], type: null };
 }
 
 function canonicalUrl(work, fallbackUrl) {
@@ -160,6 +173,7 @@ function normalizeTarget(rawUrl) {
   return {
     inputUrl: rawUrl,
     photoId: work.id,
+    photoIds: work.ids || [],
     itemType: work.type,
     url: canonicalUrl(work, rawUrl),
   };
@@ -249,7 +263,7 @@ function normalizeWorkStats(raw, source = 'api') {
     work_title: normalizeText(firstValue(raw, ['caption', 'desc', 'title', 'photoCaption', 'content'])),
     like_count: normalizeCount(firstValue(statistics, ['likeCount', 'likedCount', 'realLikeCount', 'digg_count', 'like_count', 'likes'])),
     comment_count: normalizeCount(firstValue(statistics, ['commentCount', 'comment_count', 'comments'])),
-    collect_count: normalizeCount(firstValue(statistics, ['collect_count', 'collection_count', 'favorite_count', 'favourite_count'])),
+    collect_count: normalizeCount(firstValue(statistics, ['collectCount', 'collectionCount', 'collect_count', 'collection_count', 'favorite_count', 'favourite_count'])),
     share_count: normalizeCount(firstValue(statistics, ['shareCount', 'forwardCount', 'share_count', 'shares'])),
     publish_time: publish.formatted,
     publish_timestamp: publish.timestamp,
@@ -259,6 +273,34 @@ function normalizeWorkStats(raw, source = 'api') {
   const hasAny = ['author_nickname', 'work_title', 'like_count', 'comment_count', 'collect_count', 'share_count', 'publish_time', 'publish_timestamp', 'publish_time_raw']
     .some((key) => row[key] != null);
   return hasAny ? row : null;
+}
+
+function extractCandidateIds(value) {
+  const ids = new Set();
+  if (!value || typeof value !== 'object') return [];
+  for (const key of ['photo_id', 'photoId', 'photoIdStr', 'photo_id_str', 'item_id', 'itemId', 'id']) {
+    if (value[key] != null && typeof value[key] !== 'object') ids.add(String(value[key]));
+  }
+  for (const key of ['share_info', 'shareInfo']) {
+    const shareInfo = value[key];
+    if (typeof shareInfo === 'string') {
+      try {
+        const params = new URLSearchParams(shareInfo);
+        for (const idKey of ['photoId', 'photo_id', 'shareObjectId']) {
+          const id = params.get(idKey);
+          if (id) ids.add(id);
+        }
+      } catch {
+        const match = shareInfo.match(/(?:^|&)(?:photoId|photo_id|shareObjectId)=([^&]+)/);
+        if (match) ids.add(decodeURIComponent(match[1]));
+      }
+    } else if (shareInfo && typeof shareInfo === 'object') {
+      for (const idKey of ['photoId', 'photo_id', 'shareObjectId']) {
+        if (shareInfo[idKey] != null) ids.add(String(shareInfo[idKey]));
+      }
+    }
+  }
+  return [...ids];
 }
 
 function mergeWorkStats(current, next) {
@@ -273,15 +315,14 @@ function mergeWorkStats(current, next) {
   return merged;
 }
 
-function collectWorkStats(value, targetId, out = []) {
+function collectWorkStats(value, contextIds = [], out = []) {
   if (!value || typeof value !== 'object') return out;
   if (Array.isArray(value)) {
-    for (const item of value) collectWorkStats(item, targetId, out);
+    for (const item of value) collectWorkStats(item, contextIds, out);
     return out;
   }
 
-  const rawId = value.photo_id || value.photoId || value.photoIdStr || value.photo_id_str || value.item_id || value.itemId || value.id;
-  const idMatches = targetId ? rawId && String(rawId) === String(targetId) : !rawId;
+  const candidateIds = [...new Set([...extractCandidateIds(value), ...contextIds.map(String)])];
   const looksLikeWork =
     value.statistics ||
     value.stats ||
@@ -297,13 +338,13 @@ function collectWorkStats(value, targetId, out = []) {
     value.timestamp ||
     value.publish_time ||
     value.publishTime;
-  if (idMatches && looksLikeWork) {
+  if (looksLikeWork) {
     const stats = normalizeWorkStats(value, 'api');
-    if (stats) out.push({ ...stats, candidate_photo_id: rawId ? String(rawId) : null });
+    if (stats) out.push({ ...stats, candidate_photo_ids: candidateIds });
   }
 
   for (const key of ['photo', 'photos', 'photoList', 'feeds', 'items', 'list', 'data', 'visionVideoDetail', 'photoResult']) {
-    if (value[key]) collectWorkStats(value[key], targetId, out);
+    if (value[key]) collectWorkStats(value[key], contextIds, out);
   }
   return out;
 }
@@ -328,6 +369,30 @@ function domStatsExpression() {
         return Math.round(number);
       };
       const bodyText = document.body.innerText || '';
+      const readByAction = (tokens) => {
+        const items = [...document.querySelectorAll('[data-log-action], .action-item')];
+        for (const item of items) {
+          const action = item.getAttribute('data-log-action') || '';
+          const className = item.className || '';
+          const marker = (action + ' ' + className).toUpperCase();
+          if (!tokens.some((token) => marker.includes(token))) continue;
+          const directText = [...item.children].find((child) => child.classList?.contains('text'));
+          const text = directText?.textContent || item.textContent || '';
+          const count = normalizeCount(text);
+          if (count != null) return count;
+        }
+        return null;
+      };
+      const readTextByAction = (tokens) => {
+        const items = [...document.querySelectorAll('[data-log-action]')];
+        for (const item of items) {
+          const action = (item.getAttribute('data-log-action') || '').toUpperCase();
+          if (!tokens.some((token) => action.includes(token))) continue;
+          const text = (item.textContent || '').trim();
+          if (text) return text;
+        }
+        return null;
+      };
       const readByLabel = (labels) => {
         for (const label of labels) {
           const patterns = [
@@ -343,11 +408,14 @@ function domStatsExpression() {
         return null;
       };
       const publishMatch = bodyText.match(/(\\d{4}[-/.年]\\d{1,2}[-/.月]\\d{1,2}日?(?:\\s+\\d{1,2}:\\d{2})?)/);
+      const author = readTextByAction(['AUTHOR_NICKNAME']);
       return {
-        like_count: readByLabel(['点赞', '喜欢']),
-        comment_count: readByLabel(['评论']),
-        collect_count: readByLabel(['收藏']),
-        share_count: readByLabel(['分享', '转发']),
+        author_nickname: author ? author.replace(/^@/, '') : null,
+        work_title: readTextByAction(['PHOTO_DESCRIPTION']),
+        like_count: readByAction(['LIKE']) ?? readByLabel(['点赞', '喜欢']),
+        comment_count: readByAction(['COMMENT']) ?? readByLabel(['评论']),
+        collect_count: readByAction(['COLLECT', 'FAVORITE']) ?? readByLabel(['收藏']),
+        share_count: readByAction(['SHARE', 'FORWARD']),
         publish_time_raw: publishMatch?.[1] || null,
         source: 'dom',
       };
@@ -445,18 +513,27 @@ async function scrapeOne(target, options, session) {
   const { cdp } = session;
   const responseUrls = new Map();
   const statsCandidates = [];
+  const effectivePhotoIds = new Set([target.photoId, ...(target.photoIds || [])].filter(Boolean).map(String));
   let effectivePhotoId = target.photoId;
   let stats = null;
   let offResponseReceived = null;
   let offLoadingFinished = null;
 
+  const addEffectiveIds = (work) => {
+    if (work?.id) {
+      effectivePhotoId = work.id;
+      effectivePhotoIds.add(String(work.id));
+    }
+    for (const id of work?.ids || []) effectivePhotoIds.add(String(id));
+  };
+
   const rebuildStats = () => {
     stats = null;
     for (const candidate of statsCandidates) {
-      const candidateId = candidate.candidate_photo_id;
-      const matches = effectivePhotoId
-        ? candidateId && String(candidateId) === String(effectivePhotoId)
-        : !candidateId;
+      const candidateIds = candidate.candidate_photo_ids || (candidate.candidate_photo_id ? [candidate.candidate_photo_id] : []);
+      const matches = effectivePhotoIds.size
+        ? candidateIds.some((candidateId) => effectivePhotoIds.has(String(candidateId)))
+        : !candidateIds.length;
       if (matches) stats = mergeWorkStats(stats, candidate);
     }
   };
@@ -476,7 +553,8 @@ async function scrapeOne(target, options, session) {
       try {
         const body = await cdp.send('Network.getResponseBody', { requestId: params.requestId });
         const parsed = JSON.parse(body.body);
-        statsCandidates.push(...collectWorkStats(parsed, effectivePhotoId));
+        const responseWork = workFromUrl(url);
+        statsCandidates.push(...collectWorkStats(parsed, responseWork.ids || []));
         rebuildStats();
         if (stats) console.log(`[${target.photoId || target.url}] stats from ${new URL(url).pathname}`);
       } catch {
@@ -497,8 +575,8 @@ async function scrapeOne(target, options, session) {
         returnByValue: true,
       }).then((result) => result.result?.value).catch(() => null);
       const currentWork = href ? workFromUrl(href) : { id: null };
-      if (currentWork.id && currentWork.id !== effectivePhotoId) {
-        effectivePhotoId = currentWork.id;
+      if (currentWork.id || currentWork.ids?.length) {
+        addEffectiveIds(currentWork);
         rebuildStats();
       }
       if (stats?.like_count != null && stats?.comment_count != null && (stats?.publish_time || stats?.publish_time_raw)) {
@@ -515,17 +593,20 @@ async function scrapeOne(target, options, session) {
       returnByValue: true,
     }).then((result) => result.result?.value || {}).catch(() => ({}));
     const apolloStats = normalizeWorkStats(apolloRaw, 'apollo');
-    if (apolloRaw.photoId && apolloStats) statsCandidates.push({ ...apolloStats, candidate_photo_id: String(apolloRaw.photoId) });
+    if (apolloRaw.photoId && apolloStats) statsCandidates.push({ ...apolloStats, candidate_photo_ids: [String(apolloRaw.photoId)] });
     rebuildStats();
 
     const finalUrl = finalState.href || target.url;
     const finalWork = workFromUrl(finalUrl);
     const finalId = finalWork.id || target.photoId;
-    if (finalId && finalId !== effectivePhotoId) {
-      effectivePhotoId = finalId;
-      rebuildStats();
-    }
+    addEffectiveIds(finalWork);
+    rebuildStats();
+    const domStats = await cdp.send('Runtime.evaluate', {
+      expression: domStatsExpression(),
+      returnByValue: true,
+    }).then((result) => result.result?.value || null).catch(() => null);
     stats = stats || {};
+    stats = mergeWorkStats(stats, domStats);
     const publish = normalizePublishTime(stats.publish_time || stats.publish_time_raw);
     if (!stats.publish_time && publish.formatted) stats.publish_time = publish.formatted;
     if (!stats.publish_timestamp && publish.timestamp) stats.publish_timestamp = publish.timestamp;
