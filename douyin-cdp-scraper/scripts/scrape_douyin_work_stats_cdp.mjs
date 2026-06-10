@@ -94,7 +94,12 @@ function connect(wsUrl) {
         },
         on(method, listener) {
           if (!listeners.has(method)) listeners.set(method, new Set());
-          listeners.get(method).add(listener);
+          const methodListeners = listeners.get(method);
+          methodListeners.add(listener);
+          return () => {
+            methodListeners.delete(listener);
+            if (!methodListeners.size) listeners.delete(method);
+          };
         },
         close() {
           ws.close();
@@ -311,6 +316,15 @@ async function closePage(cdp, page) {
   cdp.close();
 }
 
+async function createScrapeSession(options) {
+  const page = await createPage(options.cdpBase);
+  const cdp = await connect(page.webSocketDebuggerUrl);
+  await cdp.send('Page.enable');
+  await cdp.send('Runtime.enable');
+  await cdp.send('Network.enable', { maxResourceBufferSize: 10000000, maxTotalBufferSize: 50000000 });
+  return { page, cdp };
+}
+
 async function writeSummaryCsv(outDir, rows) {
   await fs.mkdir(outDir, { recursive: true });
   const csvPath = path.join(outDir, 'douyin_work_stats_summary.csv');
@@ -333,13 +347,14 @@ async function writeSummaryCsv(outDir, rows) {
   return csvPath;
 }
 
-async function scrapeOne(target, options) {
-  const page = await createPage(options.cdpBase);
-  const cdp = await connect(page.webSocketDebuggerUrl);
+async function scrapeOne(target, options, session) {
+  const { cdp } = session;
   const responseUrls = new Map();
   const statsCandidates = [];
   let effectiveAwemeId = target.awemeId;
   let stats = null;
+  let offResponseReceived = null;
+  let offLoadingFinished = null;
 
   const rebuildStats = () => {
     stats = null;
@@ -353,14 +368,14 @@ async function scrapeOne(target, options) {
   };
 
   try {
-    cdp.on('Network.responseReceived', (params) => {
+    offResponseReceived = cdp.on('Network.responseReceived', (params) => {
       const url = params.response?.url || '';
       if (/douyin\.com|amemv\.com|snssdk\.com/.test(url)) {
         responseUrls.set(params.requestId, url);
       }
     });
 
-    cdp.on('Network.loadingFinished', async (params) => {
+    offLoadingFinished = cdp.on('Network.loadingFinished', async (params) => {
       const url = responseUrls.get(params.requestId);
       if (!url) return;
       responseUrls.delete(params.requestId);
@@ -375,11 +390,7 @@ async function scrapeOne(target, options) {
       }
     });
 
-    await cdp.send('Page.enable');
-    await cdp.send('Runtime.enable');
-    await cdp.send('Network.enable', { maxResourceBufferSize: 10000000, maxTotalBufferSize: 50000000 });
     await cdp.send('Page.navigate', { url: target.url });
-    await cdp.send('Page.bringToFront');
 
     const startedAt = Date.now();
     while (Date.now() - startedAt < options.maxRunMs) {
@@ -440,11 +451,13 @@ async function scrapeOne(target, options) {
       ...stats,
       stats,
     };
-    await closePage(cdp, page);
     return payload;
   } catch (error) {
-    await closePage(cdp, page);
     throw error;
+  } finally {
+    offResponseReceived?.();
+    offLoadingFinished?.();
+    responseUrls.clear();
   }
 }
 
@@ -457,15 +470,20 @@ async function loadUrls(options) {
   return urls;
 }
 
-async function runWithConcurrency(items, concurrency, worker) {
-  const results = new Array(items.length);
+async function scrapeWithConcurrency(targets, options) {
+  const results = new Array(targets.length);
   let nextIndex = 0;
-  const workerCount = Math.min(concurrency, items.length);
+  const workerCount = Math.min(options.concurrency, targets.length);
   await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await worker(items[index], index);
+    const session = await createScrapeSession(options);
+    try {
+      while (nextIndex < targets.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await scrapeOne(targets[index], options, session);
+      }
+    } finally {
+      await closePage(session.cdp, session.page);
     }
   }));
   return results;
@@ -490,7 +508,7 @@ async function main() {
   });
 
   const targets = urls.map(normalizeTarget);
-  const results = await runWithConcurrency(targets, options.concurrency, (target) => scrapeOne(target, options));
+  const results = await scrapeWithConcurrency(targets, options);
   const csvPath = await writeSummaryCsv(options.outDir, results);
   console.log(`Wrote ${results.length} rows to ${csvPath}`);
 }

@@ -46,6 +46,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
 ```
 
 Use `1` for safest behavior, `2` or `3` for moderate parallelism.
+The scraper opens at most one Chrome tab per worker, reuses it for multiple works, avoids focusing Chrome, and closes the created tabs after the batch finishes.
 
 ## Outputs
 
