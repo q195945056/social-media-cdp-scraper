@@ -421,6 +421,23 @@ async function scrapeOne(target, options, session) {
   let offLoadingFinished = null;
 
   try {
+  const collectDomCommentsIntoMap = async () => {
+    const domComments = await cdp.send('Runtime.evaluate', {
+      expression: domCommentExtractionExpression(),
+      returnByValue: true,
+    }).then((result) => result.result?.value || []).catch(() => []);
+    let added = 0;
+    for (const comment of domComments) {
+      const normalized = normalizeComment(comment);
+      if (normalized && !comments.has(normalized.cid)) {
+        comments.set(normalized.cid, normalized);
+        added += 1;
+      }
+    }
+    if (added) lastNewAt = Date.now();
+    return { added, seen: domComments.length };
+  };
+
   offResponseReceived = cdp.on('Network.responseReceived', (params) => {
     const url = params.response?.url || '';
     if (/comment|reply/i.test(url) && /kuaishou\.com|chenzhongtech\.com|gifshow\.com/.test(url)) {
@@ -462,7 +479,8 @@ async function scrapeOne(target, options, session) {
       expression: `
         (() => {
           let clickedNoteCommentsTab = false;
-          let visibleCommentScroller = Array.from(document.querySelectorAll('.comment-mainContent, [class*="comment-mainContent"]'))
+          const preferredScroller = document.querySelector('.short-video-info-container');
+          let visibleCommentScroller = preferredScroller || Array.from(document.querySelectorAll('.comment-mainContent, [class*="comment-mainContent"]'))
             .find((el) => {
               const rect = el.getBoundingClientRect();
               return rect.width > 0 && rect.height > 0 && el.scrollHeight > el.clientHeight + 20;
@@ -472,24 +490,26 @@ async function scrapeOne(target, options, session) {
             return /(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 100;
           }).sort((a, b) => b.clientHeight - a.clientHeight);
           const scroller = visibleCommentScroller || candidates[0] || document.scrollingElement || document.documentElement;
-          const delta = Math.max(600, scroller.clientHeight * 0.9);
-          scroller.scrollTop += delta;
+          const delta = Math.max(900, scroller.clientHeight * 1.4);
+          scroller.scrollTop = Math.min(scroller.scrollTop + delta, Math.max(0, scroller.scrollHeight - scroller.clientHeight));
           scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
           scroller.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: delta, deltaMode: 0 }));
           if (!visibleCommentScroller) window.scrollBy(0, Math.max(600, innerHeight * 0.85));
           const rect = scroller.getBoundingClientRect();
+          const wheelX = Math.min(Math.max(1, Math.round(rect.left + rect.width / 2)), Math.max(1, innerWidth - 2));
+          const wheelY = Math.min(Math.max(1, Math.round(rect.top + rect.height / 2)), Math.max(1, innerHeight - 2));
           const text = document.body.innerText || '';
           return {
             href: location.href,
             title: document.title,
             top: scroller.scrollTop,
             height: scroller.scrollHeight,
-            wheelX: Math.max(1, Math.round(rect.left + rect.width / 2)),
-            wheelY: Math.max(1, Math.round(rect.top + rect.height / 2)),
+            wheelX,
+            wheelY,
             wheelDelta: delta,
             hasVisibleCommentScroller: Boolean(visibleCommentScroller),
             clickedNoteCommentsTab,
-            noMoreComments: /暂时没有更多评论|没有更多评论|没有更多了|到底了/.test(text),
+            noMoreComments: /已经到底了，没有更多评论了|暂时没有更多评论|没有更多评论|没有更多了|到底了/.test(text),
           };
         })()
       `,
@@ -507,6 +527,11 @@ async function scrapeOne(target, options, session) {
     if (scrollState?.noMoreComments) {
       sawNoMoreComments = true;
       console.log(`[${target.photoId || target.url}] no more comments on page`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const domResult = await collectDomCommentsIntoMap();
+    if (domResult.added) {
+      console.log(`[${target.photoId || target.url}] comments=${comments.size} from DOM`);
     }
     if (sawNoMoreComments) break;
   }
@@ -542,20 +567,9 @@ async function scrapeOne(target, options, session) {
     }
   }
 
-  if (comments.size === 0) {
-    const domComments = await cdp.send('Runtime.evaluate', {
-      expression: domCommentExtractionExpression(),
-      returnByValue: true,
-    }).then((result) => result.result?.value || []).catch(() => []);
-    for (const comment of domComments) {
-      const normalized = normalizeComment(comment);
-      if (normalized && !comments.has(normalized.cid)) {
-        comments.set(normalized.cid, normalized);
-      }
-    }
-    if (domComments.length) {
-      console.log(`[${finalTarget.photoId || finalTarget.url}] comments=${comments.size} from DOM`);
-    }
+  const finalDomResult = await collectDomCommentsIntoMap();
+  if (finalDomResult.added || (comments.size && !sawCommentApi)) {
+    console.log(`[${finalTarget.photoId || finalTarget.url}] comments=${comments.size} from DOM`);
   }
 
   const rows = Array.from(comments.values()).slice(0, options.maxComments);
