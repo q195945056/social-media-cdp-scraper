@@ -1,4 +1,0 @@
-interface:
-  display_name: "Kuaishou CDP Scraper"
-  short_description: "Compatibility alias for the unified Douyin/Kuaishou CDP scraper"
-  default_prompt: "Use $douyin-cdp-scraper to scrape comments or work metrics from these Kuaishou links."
