@@ -1,6 +1,6 @@
 ---
 name: douyin-cdp-scraper
-description: Scrape Douyin comments or work-level metrics through a real Chrome browser connected by Chrome DevTools Protocol (CDP). Use when the user asks to 抓取/导出/采集 抖音作品评论, 评论明细, 点赞数, 评论数, 收藏数, 转发数, 发布时间, or provides Douyin video/search/modal links for JSON/CSV exports.
+description: Scrape Douyin comments or work-level metrics through a real Chrome browser connected by Chrome DevTools Protocol (CDP). Use when the user asks to 抓取/导出/采集 抖音作品评论, 评论明细, 点赞数, 评论数, 收藏数, 转发数, 发布时间, or provides Douyin video/search/modal links for CSV exports.
 ---
 
 # Douyin CDP Scraper
@@ -43,7 +43,7 @@ The helper uses a fixed persistent profile at `~/.codex/chrome-profiles/douyin-c
 - Request escalation before starting Chrome, because it launches a GUI app.
 - In this Codex sandbox, run helper and scraper commands with the `env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy node ...` prefix so local CDP access is allowed and not routed through proxies.
 - Batch scraping supports `--concurrency N`. Use `1` for safest behavior, `2` or `3` for moderate parallelism. Avoid high values because every worker opens a separate Chrome page and Douyin may rate-limit or show verification prompts.
-- Work stats scraping reuses the Chrome tabs it creates across works, avoids bringing Chrome to the foreground, and closes those tabs after the queue finishes.
+- Comment and work stats scraping reuse the Chrome tabs they create across works, avoid bringing Chrome to the foreground, and close those tabs after the queue finishes.
 - Do not use a workspace-local `--user-data-dir` unless the user explicitly wants an isolated throwaway profile. It causes repeated Douyin login prompts when the skill is used from different workspaces.
 - A normal already-open Chrome profile cannot be retrofitted with CDP. The user should log in once inside the persistent CDP Chrome window; future runs should reuse that profile.
 - Keep proxy variables unset for local CDP calls; otherwise Node may route `127.0.0.1` through a proxy.

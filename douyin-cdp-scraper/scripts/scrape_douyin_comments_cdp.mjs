@@ -53,14 +53,14 @@ async function getJson(url) {
 async function createPage(cdpBase) {
   try {
     const response = await fetch(`${cdpBase}/json/new?about:blank`, { method: 'PUT' });
-    if (response.ok) return response.json();
+    if (response.ok) return { ...await response.json(), shouldCloseTarget: true };
   } catch {
     // Reuse an existing page if Chrome does not allow creating a new one.
   }
   const pages = await getJson(`${cdpBase}/json/list`);
   const page = pages.find((item) => item.type === 'page' && item.webSocketDebuggerUrl);
   if (!page) throw new Error('No CDP page target available');
-  return page;
+  return { ...page, shouldCloseTarget: false };
 }
 
 function connect(wsUrl) {
@@ -98,7 +98,12 @@ function connect(wsUrl) {
         },
         on(method, listener) {
           if (!listeners.has(method)) listeners.set(method, new Set());
-          listeners.get(method).add(listener);
+          const methodListeners = listeners.get(method);
+          methodListeners.add(listener);
+          return () => {
+            methodListeners.delete(listener);
+            if (!methodListeners.size) listeners.delete(method);
+          };
         },
         close() {
           ws.close();
@@ -174,16 +179,38 @@ function outputBase(target) {
   return target.awemeId ? `douyin_comments_${target.awemeId}` : `douyin_comments_${Date.now()}`;
 }
 
-async function writeOutputs(outDir, base, payload) {
+async function writeOutputCsv(outDir, base, payload) {
   await fs.mkdir(outDir, { recursive: true });
-  const jsonPath = path.join(outDir, `${base}.json`);
   const csvPath = path.join(outDir, `${base}.csv`);
-  await fs.writeFile(jsonPath, JSON.stringify(payload, null, 2));
-
-  const columns = ['cid', 'text', 'create_time', 'digg_count', 'reply_comment_total', 'user_nickname', 'user_uid', 'user_sec_uid'];
-  const rows = payload.comments.map((row) => columns.map((key) => csvEscape(row[key])).join(','));
+  const columns = [
+    'cid',
+    'text',
+    'create_time',
+    'digg_count',
+    'reply_comment_total',
+    'user_nickname',
+    'user_uid',
+    'user_sec_uid',
+  ];
+  const rows = payload.comments.map((comment) => columns.map((key) => csvEscape(comment[key])).join(','));
   await fs.writeFile(csvPath, [columns.join(','), ...rows].join('\n'));
-  return { jsonPath, csvPath };
+  return csvPath;
+}
+
+async function closePage(cdp, page) {
+  if (page.shouldCloseTarget && page.id) {
+    await cdp.send('Target.closeTarget', { targetId: page.id }).catch(() => {});
+  }
+  cdp.close();
+}
+
+async function createScrapeSession(options) {
+  const page = await createPage(options.cdpBase);
+  const cdp = await connect(page.webSocketDebuggerUrl);
+  await cdp.send('Page.enable');
+  await cdp.send('Runtime.enable');
+  await cdp.send('Network.enable', { maxResourceBufferSize: 10000000, maxTotalBufferSize: 50000000 });
+  return { page, cdp };
 }
 
 function domCommentExtractionExpression() {
@@ -287,17 +314,18 @@ async function activateNoteCommentsTab(cdp, target) {
   return false;
 }
 
-async function scrapeOne(target, options) {
-  const page = await createPage(options.cdpBase);
-  const cdp = await connect(page.webSocketDebuggerUrl);
+async function scrapeOne(target, options, session) {
+  const { cdp } = session;
   const comments = new Map();
   const responseUrls = new Map();
   let sawCommentApi = false;
   let lastNewAt = Date.now();
   let sawNoMoreComments = false;
+  let offResponseReceived = null;
+  let offLoadingFinished = null;
 
   try {
-  cdp.on('Network.responseReceived', (params) => {
+  offResponseReceived = cdp.on('Network.responseReceived', (params) => {
     const url = params.response?.url || '';
     if (/comment|reply/i.test(url) && /douyin\.com|amemv\.com|snssdk\.com/.test(url)) {
       responseUrls.set(params.requestId, url);
@@ -305,7 +333,7 @@ async function scrapeOne(target, options) {
     }
   });
 
-  cdp.on('Network.loadingFinished', async (params) => {
+  offLoadingFinished = cdp.on('Network.loadingFinished', async (params) => {
     const url = responseUrls.get(params.requestId);
     if (!url) return;
     responseUrls.delete(params.requestId);
@@ -324,11 +352,7 @@ async function scrapeOne(target, options) {
     }
   });
 
-  await cdp.send('Page.enable');
-  await cdp.send('Runtime.enable');
-  await cdp.send('Network.enable', { maxResourceBufferSize: 10000000, maxTotalBufferSize: 50000000 });
   await cdp.send('Page.navigate', { url: target.url });
-  await cdp.send('Page.bringToFront');
   await new Promise((resolve) => setTimeout(resolve, 1200));
   let clickedNoteCommentsTab = await activateNoteCommentsTab(cdp, target);
 
@@ -441,12 +465,14 @@ async function scrapeOne(target, options) {
     sawNoMoreComments,
     comments: rows,
   };
-  const files = await writeOutputs(options.outDir, outputBase(finalTarget), payload);
-  cdp.close();
-  return { ...files, count: rows.length, sawCommentApi, sawNoMoreComments, awemeId: finalTarget.awemeId, targetUrl: finalTarget.url, title: payload.title };
+  const csvPath = await writeOutputCsv(options.outDir, outputBase(finalTarget), payload);
+  return { csvPath, count: rows.length, sawCommentApi, sawNoMoreComments, awemeId: finalTarget.awemeId, targetUrl: finalTarget.url, title: payload.title };
   } catch (error) {
-    cdp.close();
     throw error;
+  } finally {
+    offResponseReceived?.();
+    offLoadingFinished?.();
+    responseUrls.clear();
   }
 }
 
@@ -459,15 +485,20 @@ async function loadUrls(options) {
   return urls;
 }
 
-async function runWithConcurrency(items, concurrency, worker) {
-  const results = new Array(items.length);
+async function scrapeWithConcurrency(targets, options) {
+  const results = new Array(targets.length);
   let nextIndex = 0;
-  const workerCount = Math.min(concurrency, items.length);
+  const workerCount = Math.min(options.concurrency, targets.length);
   await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await worker(items[index], index);
+    const session = await createScrapeSession(options);
+    try {
+      while (nextIndex < targets.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await scrapeOne(targets[index], options, session);
+      }
+    } finally {
+      await closePage(session.cdp, session.page);
     }
   }));
   return results;
@@ -495,9 +526,7 @@ async function main() {
   });
 
   const targets = urls.map(normalizeTarget);
-  const results = await runWithConcurrency(targets, options.concurrency, (target) => scrapeOne(target, options));
-  await fs.mkdir(options.outDir, { recursive: true });
-  await fs.writeFile(path.join(options.outDir, 'douyin_comments_summary.json'), JSON.stringify(results, null, 2));
+  const results = await scrapeWithConcurrency(targets, options);
   console.log(JSON.stringify(results, null, 2));
 }
 

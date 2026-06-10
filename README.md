@@ -73,8 +73,12 @@ https://www.douyin.com/video/...
 并发抓取：
 
 ```text
-[$douyin-cdp-scraper] 批量抓取 urls.txt 里的作品评论，每个最多 500 条，并发数 2，导出到 ./douyin-comments
+[$douyin-cdp-scraper] 批量抓取这些作品评论，每个最多 500 条，并发数 2，导出到 ./douyin-comments：
+https://www.douyin.com/video/...
+https://www.douyin.com/video/...
 ```
+
+评论数据按作品分别输出 CSV：`douyin_comments_<awemeId>.csv`，不生成 JSON。
 
 ## 作品数据抓取使用方式
 

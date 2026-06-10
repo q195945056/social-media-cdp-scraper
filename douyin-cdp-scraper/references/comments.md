@@ -21,21 +21,24 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
 
 ## Batch
 
-Pass `--url` multiple times or create a newline-delimited URL file:
+Pass `--url` multiple times:
 
 ```bash
 env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
   node /Users/yanmingjun/.codex/skills/douyin-cdp-scraper/scripts/scrape_douyin_comments_cdp.mjs \
-  --input urls.txt \
+  --url "https://www.douyin.com/video/7598470240644664611" \
+  --url "https://www.douyin.com/video/7598470240644664612" \
   --max 500 \
   --concurrency 2 \
   --out-dir ./douyin-comments
 ```
 
+Use `1` for safest behavior, `2` or `3` for moderate parallelism.
+The scraper opens at most one Chrome tab per worker, reuses it for multiple works, avoids focusing Chrome, and closes the created tabs after the batch finishes.
+
 ## Outputs
 
-- Per work JSON: `douyin_comments_<aweme_id>.json`
-- Per work CSV: `douyin_comments_<aweme_id>.csv`
-- Batch summary: `douyin_comments_summary.json`
+- Per work comments CSV: `douyin_comments_<aweme_id>.csv`
+- No JSON files are written.
 
-Confirm JSON `count` and CSV data rows match the requested cap or the number actually loaded before the page stopped producing new comments. Treat the result as “up to N comments per work”; Douyin may stop returning more comments before the limit.
+Confirm each CSV's data rows match the requested cap or the number actually loaded before the page stopped producing new comments. Treat the result as “up to N comments per work”; Douyin may stop returning more comments before the limit.
